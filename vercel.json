@@ -1,0 +1,14 @@
+{
+  "rewrites": [
+    {
+      "source": "/jugador",
+      "destination": "/jugador.html"
+    }
+  ],
+  "crons": [
+    {
+      "path": "/api/config?recurso=cron",
+      "schedule": "0 6 * * *"
+    }
+  ]
+}
