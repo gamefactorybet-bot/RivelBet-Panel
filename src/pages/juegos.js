@@ -558,20 +558,35 @@ function panelProveedores(container) {
     if (!ok) { listaEl.innerHTML = `<p class="hint error">${error}</p>`; return; }
 
     const proveedores = data.proveedores || [];
+    const activos = proveedores.filter((p) => p.activo);
+    const msgEl = panel.querySelector('#jg-prov-msg');
 
     listaEl.innerHTML = proveedores.length ? `
       <div class="tabla-scroll">
         <table class="tabla">
-          <thead><tr><th>Nombre</th><th>Slug</th><th>Estado</th><th></th></tr></thead>
+          <thead><tr><th>Nombre</th><th>Slug</th><th>Juegos</th><th>Estado</th><th></th></tr></thead>
           <tbody>
-            ${proveedores.map((p) => `
+            ${proveedores.map((p) => {
+              const otros = activos.filter((a) => a.id !== p.id);
+              const puedeMover = p.juegos > 0 && otros.length > 0;
+              return `
               <tr>
                 <td>${escapeHtml(p.nombre)}</td>
                 <td class="mono hint">${escapeHtml(p.slug)}</td>
+                <td>${p.juegos || 0}${p.juegosActivos ? ` <span class="hint">(${p.juegosActivos} activos)</span>` : ''}</td>
                 <td>${p.activo ? '<span class="badge badge-ok">Activo</span>' : '<span class="badge badge-danger">Deshabilitado</span>'}</td>
-                <td><button class="secundario jg-prov-toggle" data-id="${p.id}" data-activo="${p.activo}">${p.activo ? 'Deshabilitar' : 'Habilitar'}</button></td>
+                <td>
+                  <button class="secundario jg-prov-toggle" data-id="${p.id}" data-activo="${p.activo}">${p.activo ? 'Deshabilitar' : 'Habilitar'}</button>
+                  ${puedeMover ? `
+                    <select class="jg-prov-destino" data-id="${p.id}" style="margin-left:6px;max-width:160px">
+                      ${otros.map((a) => `<option value="${a.id}">${escapeHtml(a.nombre)}</option>`).join('')}
+                    </select>
+                    <button class="secundario jg-prov-mover" data-id="${p.id}">Conectar juegos</button>
+                  ` : ''}
+                </td>
               </tr>
-            `).join('')}
+            `;
+            }).join('')}
           </tbody>
         </table>
       </div>
@@ -580,10 +595,33 @@ function panelProveedores(container) {
     listaEl.querySelectorAll('.jg-prov-toggle').forEach((btn) => {
       btn.addEventListener('click', async () => {
         btn.disabled = true;
-        await apiFetch('/api/config?recurso=proveedores', {
+        const { ok, error: errToggle } = await apiFetch('/api/config?recurso=proveedores', {
           method: 'POST',
           body: { id: btn.dataset.id, activo: btn.dataset.activo !== 'true' },
         });
+        if (!ok) {
+          msgEl.innerHTML = `<p class="hint error">${escapeHtml(errToggle)}</p>`;
+          btn.disabled = false;
+          return;
+        }
+        cargarLista();
+      });
+    });
+
+    listaEl.querySelectorAll('.jg-prov-mover').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const haciaId = listaEl.querySelector(`.jg-prov-destino[data-id="${btn.dataset.id}"]`)?.value;
+        btn.disabled = true;
+        const { ok, data: movido, error: errMover } = await apiFetch('/api/config?recurso=proveedores', {
+          method: 'POST',
+          body: { accion: 'mover-juegos', desdeId: btn.dataset.id, haciaId },
+        });
+        if (!ok) {
+          msgEl.innerHTML = `<p class="hint error">${escapeHtml(errMover)}</p>`;
+          btn.disabled = false;
+          return;
+        }
+        msgEl.innerHTML = `<p class="hint ok">${movido.n} juego${movido.n === 1 ? '' : 's'} conectado${movido.n === 1 ? '' : 's'} con ${escapeHtml(movido.proveedor)}.</p>`;
         cargarLista();
       });
     });

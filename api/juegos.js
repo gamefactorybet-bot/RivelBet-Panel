@@ -140,6 +140,29 @@ async function manifest(req, res) {
   }
 }
 
+// La versión del juego no sube cuando solo cambia el dominio. Igual
+// hay que reescribir launch_url: el lobby abre la que quedó guardada.
+async function refrescarLaunchUrl(slug, launchUrl, resultado) {
+  if (!launchUrl) return false;
+  const { data: fila, error: errorLee } = await supabaseAdmin
+    .from('games').select('launch_url').eq('slug', slug).maybeSingle();
+  if (errorLee) {
+    resultado.rechazados.push({ slug, motivo: errorLee.message });
+    return true;
+  }
+  if (!fila || fila.launch_url === launchUrl) return false;
+  const { error } = await supabaseAdmin
+    .from('games')
+    .update({ launch_url: launchUrl, sincronizado_at: new Date().toISOString() })
+    .eq('slug', slug);
+  if (error) {
+    resultado.rechazados.push({ slug, motivo: error.message });
+    return true;
+  }
+  resultado.actualizados.push(slug);
+  return true;
+}
+
 // POST ?recurso=sincronizar — body: { url }
 async function sincronizar(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Método no permitido' });
@@ -207,6 +230,7 @@ async function sincronizar(req, res) {
 
       if (data === 'nuevo') resultado.nuevos.push(j.slug);
       else if (data === 'actualizado') resultado.actualizados.push(j.slug);
+      else if (await refrescarLaunchUrl(j.slug, j.launch_url, resultado)) { /* el dominio cambió */ }
       else resultado.sinCambios.push(j.slug);
     }
 

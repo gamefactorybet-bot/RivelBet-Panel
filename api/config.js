@@ -1092,23 +1092,85 @@ async function proveedores(req, res) {
     if (req.method === 'GET') {
       await requireStaff(req);
 
-      const { data, error } = await supabaseAdmin
-        .from('proveedores_externos')
-        .select('id, nombre, slug, activo, created_at')  // el secreto NUNCA se lista de vuelta
-        .order('created_at', { ascending: false });
+      const [{ data, error }, { data: juegosExt, error: errorJuegos }] = await Promise.all([
+        supabaseAdmin
+          .from('proveedores_externos')
+          .select('id, nombre, slug, activo, created_at')  // el secreto NUNCA se lista de vuelta
+          .order('created_at', { ascending: false }),
+        supabaseAdmin
+          .from('games')
+          .select('proveedor_id, activo')
+          .not('launch_url', 'is', null)
+          .not('proveedor_id', 'is', null),
+      ]);
 
       if (error) return res.status(400).json({ error: error.message });
-      return res.status(200).json({ proveedores: data || [] });
+      if (errorJuegos) return res.status(400).json({ error: errorJuegos.message });
+
+      const cuentas = {};
+      for (const j of juegosExt || []) {
+        const c = cuentas[j.proveedor_id] || { juegos: 0, juegosActivos: 0 };
+        c.juegos += 1;
+        if (j.activo) c.juegosActivos += 1;
+        cuentas[j.proveedor_id] = c;
+      }
+
+      return res.status(200).json({
+        proveedores: (data || []).map((p) => ({
+          ...p,
+          juegos: cuentas[p.id]?.juegos || 0,
+          juegosActivos: cuentas[p.id]?.juegosActivos || 0,
+        })),
+      });
     }
 
     if (req.method !== 'POST') return res.status(405).json({ error: 'Método no permitido' });
 
     await requirePermiso(req, 'ajustes');
 
-    const { nombre, activo, id } = req.body || {};
+    const { nombre, activo, id, accion, desdeId, haciaId } = req.body || {};
+
+    // Los juegos guardan el id del proveedor que firma. Cambiar de
+    // proveedor no toca el secreto: solo apunta las filas al que está
+    // activo, que es el que el panel de juegos conoce.
+    if (accion === 'mover-juegos') {
+      if (!desdeId || !haciaId || desdeId === haciaId) {
+        return res.status(400).json({ error: 'Elegí el proveedor de destino' });
+      }
+      const { data: destino, error: errorDestino } = await supabaseAdmin
+        .from('proveedores_externos')
+        .select('id, nombre, activo')
+        .eq('id', haciaId)
+        .maybeSingle();
+      if (errorDestino) return res.status(400).json({ error: errorDestino.message });
+      if (!destino?.activo) return res.status(400).json({ error: 'El proveedor de destino tiene que estar activo' });
+
+      const { data: movidos, error: errorMover } = await supabaseAdmin
+        .from('games')
+        .update({ proveedor_id: haciaId })
+        .eq('proveedor_id', desdeId)
+        .not('launch_url', 'is', null)
+        .select('id');
+      if (errorMover) return res.status(400).json({ error: errorMover.message });
+      return res.status(200).json({ ok: true, n: (movidos || []).length, proveedor: destino.nombre });
+    }
 
     // Editar (activar/desactivar) no regenera el secreto
     if (id) {
+      if (activo === false) {
+        const { count, error: errorCuenta } = await supabaseAdmin
+          .from('games')
+          .select('id', { count: 'exact', head: true })
+          .eq('proveedor_id', id)
+          .eq('activo', true);
+        if (errorCuenta) return res.status(400).json({ error: errorCuenta.message });
+        if (count > 0) {
+          return res.status(400).json({
+            error: `Este proveedor tiene ${count} juego${count === 1 ? '' : 's'} activo${count === 1 ? '' : 's'}. Conectalos a otro proveedor antes de apagarlo.`,
+          });
+        }
+      }
+
       const { data, error } = await supabaseAdmin
         .from('proveedores_externos')
         .update({ activo: Boolean(activo) })
